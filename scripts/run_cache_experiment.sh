@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="${1:-YOUR_GITHUB_USERNAME/node.bcrypt.js}"
+REPO="${1:-PaulAnton03/node.bcrypt.js}"
 WORKFLOW_FILE="${2:-cache-exp-bcrypt-macos.yml}"
 
 require_cmd() {
