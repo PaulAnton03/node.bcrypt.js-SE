@@ -1,4 +1,5 @@
 name: cache-exp-bcrypt-macos
+run-name: cache-exp-bcrypt-macos ${{ inputs.variant }} rep-${{ inputs.rep }}
 
 on:
   workflow_dispatch:
