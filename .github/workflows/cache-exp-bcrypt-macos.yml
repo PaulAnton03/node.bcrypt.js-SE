@@ -1,0 +1,147 @@
+name: cache-exp-bcrypt-macos
+
+on:
+  workflow_dispatch:
+    inputs:
+      variant:
+        description: "baseline or cached"
+        required: true
+        type: choice
+        options:
+          - baseline
+          - cached
+      rep:
+        description: "replicate number (0 = warmup)"
+        required: true
+        type: string
+
+concurrency:
+  group: cache-exp-bcrypt-macos
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build-macos-exp:
+    runs-on: macos-latest
+    env:
+      NODE_VERSION: "18"
+      VARIANT: ${{ inputs.variant }}
+      REP: ${{ inputs.rep }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Eco CI needs GNU date on macOS
+      - name: Install GNU coreutils for Eco CI
+        run: |
+          brew install coreutils
+          echo "/opt/homebrew/opt/coreutils/libexec/gnubin:/usr/local/opt/coreutils/libexec/gnubin" >> "$GITHUB_PATH"
+
+      - name: Start Eco CI
+        id: eco_start
+        uses: green-coding-solutions/eco-ci-energy-estimation@v5
+        with:
+          task: start-measurement
+          send-data: false
+        continue-on-error: true
+
+      - name: Setup Node (baseline)
+        if: ${{ inputs.variant == 'baseline' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Setup Node (cached)
+        if: ${{ inputs.variant == 'cached' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          registry-url: 'https://registry.npmjs.org'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Eco CI after npm ci
+        id: after_install
+        uses: green-coding-solutions/eco-ci-energy-estimation@v5
+        with:
+          task: get-measurement
+          label: npm-ci
+          json-output: true
+          send-data: false
+        continue-on-error: true
+
+      - name: Build prebuilds
+        run: |
+          npx prebuildify --napi --strip --arch=arm64 --target=node@18.0.0
+          npx prebuildify --napi --strip --arch=x64 --target=node@18.0.0
+          find prebuilds
+
+      - name: Eco CI after prebuildify
+        id: after_build
+        uses: green-coding-solutions/eco-ci-energy-estimation@v5
+        with:
+          task: get-measurement
+          label: prebuildify
+          json-output: true
+          send-data: false
+        continue-on-error: true
+
+      - name: Eco CI display total
+        id: total
+        uses: green-coding-solutions/eco-ci-energy-estimation@v5
+        with:
+          task: display-results
+          json-output: true
+          display-badge: false
+          send-data: false
+        continue-on-error: true
+
+      - name: Write structured result artifact
+        env:
+          INSTALL_JSON: ${{ steps.after_install.outputs.data-lap-json }}
+          BUILD_JSON: ${{ steps.after_build.outputs.data-lap-json }}
+          TOTAL_JSON: ${{ steps.total.outputs.data-total-json }}
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib
+
+          def parse_env_json(name):
+              raw = os.environ.get(name, "").strip()
+              if not raw:
+                  return None
+              try:
+                  return json.loads(raw)
+              except Exception:
+                  return {"raw": raw}
+
+          result = {
+              "repo": os.environ["GITHUB_REPOSITORY"],
+              "workflow": os.environ["GITHUB_WORKFLOW"],
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "run_number": os.environ["GITHUB_RUN_NUMBER"],
+              "sha": os.environ["GITHUB_SHA"],
+              "variant": os.environ["VARIANT"],
+              "rep": os.environ["REP"],
+              "node_version": os.environ["NODE_VERSION"],
+              "install": parse_env_json("INSTALL_JSON"),
+              "build": parse_env_json("BUILD_JSON"),
+              "total": parse_env_json("TOTAL_JSON"),
+          }
+
+          out = pathlib.Path("experiment-result.json")
+          out.write_text(json.dumps(result, indent=2), encoding="utf-8")
+          print(out.read_text())
+          PY
+
+      - name: Upload experiment artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: eco-ci-result-${{ github.run_id }}
+          path: experiment-result.json
+          if-no-files-found: error
